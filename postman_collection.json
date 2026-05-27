@@ -1,0 +1,754 @@
+{
+  "info": {
+    "_postman_id": "7f3a9b2e-1c4d-4e8f-b0a2-9d6e5f3c1b7a",
+    "name": "LLM Request Processor API",
+    "description": "Distributed LLM prompt processing with semantic caching, idempotency, rate limiting, and async worker pool.\n\n**Setup:** `docker-compose up --build` — wait ~20s for services to stabilize.\n\n**Base URL:** `http://localhost:8000`\n\n**Flow:**\n1. POST /process → returns result (or status: processing on timeout)\n2. GET /result/{prompt_id} → poll for final result\n3. GET /health → system status\n4. GET /metrics → Prometheus metrics",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "API base URL — change to your deployment URL if remote"
+    },
+    {
+      "key": "last_prompt_id",
+      "value": "p-001",
+      "type": "string",
+      "description": "Automatically set by the test script in Submit New Prompt. Used by Get Result requests."
+    }
+  ],
+  "item": [
+    {
+      "name": "1 - Process Prompt",
+      "description": "POST /process — submit a prompt for LLM processing. The API waits up to 30s for completion. On cache hit returns in <50ms. If the timeout is exceeded returns status: processing and the client can poll /result/{id}.",
+      "item": [
+        {
+          "name": "Submit New Prompt (High Priority)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Has prompt_id', () => pm.expect(res.prompt_id).to.be.a('string'));",
+                  "pm.test('Has user_id', () => pm.expect(res.user_id).to.equal('alice'));",
+                  "pm.test('Status is completed or processing', () => {",
+                  "    pm.expect(['completed', 'queued', 'processing']).to.include(res.status);",
+                  "});",
+                  "pm.test('Response is string or null', () => {",
+                  "    if (res.status === 'completed') {",
+                  "        pm.expect(res.response).to.be.a('string');",
+                  "    }",
+                  "});",
+                  "",
+                  "// Save prompt_id for follow-up requests",
+                  "if (res.prompt_id) {",
+                  "    pm.collectionVariables.set('last_prompt_id', res.prompt_id);",
+                  "    console.log('Saved prompt_id:', res.prompt_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Optionally stamp a unique prompt_id per run",
+                  "// Uncomment to always create a fresh prompt:",
+                  "// pm.collectionVariables.set('last_prompt_id', 'p-' + Date.now());"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"Explain quantum computing in simple terms\",\n    \"priority\": \"high\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Submit a new prompt with high priority.\n\nExpected response: 200 with status 'completed' (on cache hit: <50ms, on LLM call: 200-500ms).\n\nThe test script automatically saves `prompt_id` to the collection variable `last_prompt_id` for use in subsequent requests."
+          },
+          "response": [
+            {
+              "name": "Completed (LLM processed)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"Explain quantum computing in simple terms\",\n    \"priority\": \"high\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"completed\",\n    \"cached\": false,\n    \"response\": \"Mock response for prompt [a3f2c1b8]: Explain quantum computing in simple terms...\",\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": 342\n}"
+            },
+            {
+              "name": "Processing Timeout (poll /result)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"Explain quantum computing in simple terms\",\n    \"priority\": \"high\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"processing\",\n    \"cached\": null,\n    \"response\": null,\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Same Prompt Again (Idempotent — Returns Cached)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Same prompt_id returned', () => pm.expect(res.prompt_id).to.equal('p-001'));",
+                  "pm.test('Cached flag is true (idempotent re-use)', () => {",
+                  "    if (res.status === 'completed') {",
+                  "        pm.expect(res.cached).to.be.true;",
+                  "    }",
+                  "});",
+                  "pm.test('Status is completed', () => pm.expect(res.status).to.equal('completed'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"Explain quantum computing in simple terms\",\n    \"priority\": \"high\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Send the EXACT same request as the first one.\n\nBecause the prompt_id and text match, the system returns the existing result immediately (no LLM call). The response will have `cached: true`.\n\nThis demonstrates idempotency: safe to retry — you always get the same result."
+          },
+          "response": [
+            {
+              "name": "Idempotent Response",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"Explain quantum computing in simple terms\",\n    \"priority\": \"high\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"completed\",\n    \"cached\": true,\n    \"response\": \"Mock response for prompt [a3f2c1b8]: Explain quantum computing in simple terms...\",\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": 342\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Prompt — Auto-Generated ID (No prompt_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Auto-generated prompt_id starts with auto-', () => {",
+                  "    pm.expect(res.prompt_id).to.match(/^auto-/);",
+                  "});",
+                  "pm.test('User ID is bob', () => pm.expect(res.user_id).to.equal('bob'));",
+                  "",
+                  "console.log('Auto-generated prompt_id:', res.prompt_id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"bob\",\n    \"text\": \"What is machine learning?\",\n    \"priority\": \"normal\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Submit WITHOUT a `prompt_id`. The system deterministically derives one from `sha256(user_id + ':' + normalize(text))`.\n\nSending the same user+text again returns the same auto-id → idempotency works even without a client-managed ID.\n\nResponse `prompt_id` will start with `auto-`."
+          },
+          "response": [
+            {
+              "name": "Auto-ID Response",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"bob\",\n    \"text\": \"What is machine learning?\",\n    \"priority\": \"normal\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"bob\",\n    \"prompt_id\": \"auto-4f2a1b3c-9d8e-7f6a-5b4c-3d2e1f0a9b8c\",\n    \"status\": \"completed\",\n    \"cached\": false,\n    \"response\": \"Mock response for prompt [b1c2d3e4]: What is machine learning?...\",\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": 278\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Prompt — Normal Priority",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has prompt_id', () => pm.expect(res.prompt_id).to.be.a('string'));",
+                  "pm.collectionVariables.set('last_prompt_id', res.prompt_id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"charlie\",\n    \"prompt_id\": \"p-002\",\n    \"text\": \"Summarize the benefits of async programming\",\n    \"priority\": \"normal\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Normal priority request. Workers process jobs in priority order (high=1, normal=2, low=3)."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit Prompt — Low Priority",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has prompt_id', () => pm.expect(res.prompt_id).to.be.a('string'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"diana\",\n    \"prompt_id\": \"p-003\",\n    \"text\": \"What are the 7 wonders of the ancient world?\",\n    \"priority\": \"low\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Low priority request — will be processed after all high and normal priority jobs."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit Prompt — Semantic Cache Hit (Similar Text)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "// If embed_provider=mock, this won't be a semantic hit (mock uses random embeddings).",
+                  "// With sentence-transformers, this similar text would hit the cache.",
+                  "console.log('Cached:', res.cached, '| Status:', res.status);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-004\",\n    \"text\": \"Can you explain quantum computing simply?\",\n    \"priority\": \"normal\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Similar (but not identical) to p-001's text. With `EMBED_PROVIDER=sentence_transformer` and similarity > 0.9, this returns the cached response instead of calling the LLM.\n\nWith `EMBED_PROVIDER=mock` (default), mock embeddings are random so this will be a miss."
+          },
+          "response": []
+        },
+        {
+          "name": "Submit Prompt — Conflict (Same ID, Different Text) → 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 409 Conflict', () => pm.response.to.have.status(409));",
+                  "const res = pm.response.json();",
+                  "pm.test('Error detail mentions prompt_id', () => {",
+                  "    pm.expect(res.detail).to.include('p-001');",
+                  "});",
+                  "console.log('Conflict error:', res.detail);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"This is DIFFERENT text for the same prompt_id — should get 409\",\n    \"priority\": \"high\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Re-use an existing `prompt_id` (p-001) but with DIFFERENT text.\n\nThe system detects the text hash mismatch and returns 409 Conflict.\n\nThis prevents silent corruption: you cannot change what a prompt_id refers to after it's been submitted.\n\n**Run AFTER** the first request in this folder."
+          },
+          "response": [
+            {
+              "name": "409 Conflict",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"text\": \"This is DIFFERENT text for the same prompt_id\",\n    \"priority\": \"high\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"detail\": \"prompt_id 'p-001' already exists with different text\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Prompt — Invalid Priority → 422",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "const res = pm.response.json();",
+                  "pm.test('Validation error returned', () => pm.expect(res.detail).to.be.an('array'));",
+                  "console.log('Validation errors:', JSON.stringify(res.detail, null, 2));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-invalid\",\n    \"text\": \"Some text\",\n    \"priority\": \"URGENT\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Send an invalid `priority` value (`URGENT` is not accepted).\n\nValid values: `high`, `normal`, `low`.\n\nPydantic validates the field and FastAPI automatically returns 422 with structured error details."
+          },
+          "response": [
+            {
+              "name": "422 Validation Error",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-invalid\",\n    \"text\": \"Some text\",\n    \"priority\": \"URGENT\"\n}"
+                },
+                "url": {"raw": "{{base_url}}/process", "host": ["{{base_url}}"], "path": ["process"]}
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"detail\": [\n        {\n            \"type\": \"value_error\",\n            \"loc\": [\"body\", \"priority\"],\n            \"msg\": \"Value error, priority must be 'high', 'normal', or 'low'\",\n            \"input\": \"URGENT\"\n        }\n    ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Submit Prompt — Missing user_id → 422",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422 Unprocessable Entity', () => pm.response.to.have.status(422));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"prompt_id\": \"p-missing-user\",\n    \"text\": \"Some prompt text\",\n    \"priority\": \"normal\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/process",
+              "host": ["{{base_url}}"],
+              "path": ["process"]
+            },
+            "description": "Submit without the required `user_id` field.\n\nPydantic marks it as required (no default). FastAPI returns 422 with field-level error details."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2 - Get Result (Polling)",
+      "description": "GET /result/{prompt_id} — polling fallback for clients that received status: processing, or want to check asynchronously.",
+      "item": [
+        {
+          "name": "Get Result by prompt_id (from variable)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has prompt_id', () => pm.expect(res.prompt_id).to.be.a('string'));",
+                  "pm.test('Has status field', () => {",
+                  "    pm.expect(['received','queued','processing','completed','failed']).to.include(res.status);",
+                  "});",
+                  "console.log('Current status:', res.status);",
+                  "if (res.status === 'completed') {",
+                  "    pm.test('Completed has response', () => pm.expect(res.response).to.be.a('string'));",
+                  "    pm.test('Has processing_time_ms', () => pm.expect(res.processing_time_ms).to.be.a('number'));",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/result/{{last_prompt_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["result", "{{last_prompt_id}}"]
+            },
+            "description": "Poll for the result of the last submitted prompt.\n\n`{{last_prompt_id}}` is automatically set by the test script in the Submit requests.\n\nPossible statuses:\n- `received` — acknowledged, not yet queued\n- `queued` — waiting for a worker\n- `processing` — worker is actively running the pipeline\n- `completed` — done; `response` field is populated\n- `failed` — all retry attempts exhausted; `error` field explains why"
+          },
+          "response": [
+            {
+              "name": "Completed",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/result/p-001", "host": ["{{base_url}}"], "path": ["result", "p-001"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"completed\",\n    \"cached\": false,\n    \"response\": \"Mock response for prompt [a3f2c1b8]: Explain quantum computing in simple terms...\",\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": 342\n}"
+            },
+            {
+              "name": "Still Processing",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/result/p-001", "host": ["{{base_url}}"], "path": ["result", "p-001"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"processing\",\n    \"cached\": null,\n    \"response\": null,\n    \"error\": null,\n    \"retry_count\": 0,\n    \"processing_time_ms\": null\n}"
+            },
+            {
+              "name": "Failed (after retries exhausted)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/result/p-001", "host": ["{{base_url}}"], "path": ["result", "p-001"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"user_id\": \"alice\",\n    \"prompt_id\": \"p-001\",\n    \"status\": \"failed\",\n    \"cached\": null,\n    \"response\": null,\n    \"error\": \"Mock LLM random failure\",\n    \"retry_count\": 5,\n    \"processing_time_ms\": null\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Result — Specific ID (p-001)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK or 404', () => {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/result/p-001",
+              "host": ["{{base_url}}"],
+              "path": ["result", "p-001"]
+            },
+            "description": "Get result for the hardcoded prompt ID `p-001`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Result — Not Found → 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404 Not Found', () => pm.response.to.have.status(404));",
+                  "const res = pm.response.json();",
+                  "pm.test('Error detail is informative', () => {",
+                  "    pm.expect(res.detail).to.be.a('string');",
+                  "});",
+                  "console.log('Not found error:', res.detail);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/result/non-existent-prompt-id-xyz123",
+              "host": ["{{base_url}}"],
+              "path": ["result", "non-existent-prompt-id-xyz123"]
+            },
+            "description": "Request a `prompt_id` that does not exist in the database.\n\nExpected: 404 with `{ \"detail\": \"prompt_id not found\" }`"
+          },
+          "response": [
+            {
+              "name": "404 Not Found",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/result/non-existent-prompt-id-xyz123", "host": ["{{base_url}}"], "path": ["result", "non-existent-prompt-id-xyz123"]}
+              },
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"detail\": \"prompt_id not found\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 - Health & Monitoring",
+      "description": "System health check and Prometheus metrics endpoints.",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "const res = pm.response.json();",
+                  "pm.test('Has status field', () => pm.expect(['healthy', 'degraded']).to.include(res.status));",
+                  "pm.test('Has timestamp', () => pm.expect(res.timestamp).to.be.a('string'));",
+                  "pm.test('Has components', () => pm.expect(res.components).to.be.an('object'));",
+                  "pm.test('Database component present', () => pm.expect(res.components.database).to.be.a('string'));",
+                  "pm.test('Worker component present', () => pm.expect(res.components.worker).to.be.a('string'));",
+                  "pm.test('Cache component present', () => pm.expect(res.components.cache).to.be.a('string'));",
+                  "",
+                  "const allHealthy = res.status === 'healthy';",
+                  "console.log('System status:', res.status);",
+                  "console.log('Database:', res.components.database);",
+                  "console.log('Worker:', res.components.worker);",
+                  "console.log('Cache:', res.components.cache);",
+                  "",
+                  "if (!allHealthy) {",
+                  "    console.warn('System is DEGRADED — check service logs');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Returns system health status including:\n- `database`: PostgreSQL connectivity (`connected` | `unavailable`)\n- `worker`: Worker liveness based on recent heartbeats (`running` | `idle` | `unknown`)\n- `cache`: Redis connectivity (`available` | `unavailable`)\n\nOverall status is `healthy` only when all three components report OK.\n\nUsed by Docker Compose healthchecks and can be wired to Kubernetes liveness/readiness probes."
+          },
+          "response": [
+            {
+              "name": "All Healthy",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"status\": \"healthy\",\n    \"timestamp\": \"2025-05-28T10:30:00.000000+00:00\",\n    \"components\": {\n        \"database\": \"connected\",\n        \"worker\": \"running\",\n        \"cache\": \"available\"\n    }\n}"
+            },
+            {
+              "name": "Degraded (Redis down)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{"key": "Content-Type", "value": "application/json"}],
+              "body": "{\n    \"status\": \"degraded\",\n    \"timestamp\": \"2025-05-28T10:30:00.000000+00:00\",\n    \"components\": {\n        \"database\": \"connected\",\n        \"worker\": \"idle\",\n        \"cache\": \"unavailable\"\n    }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Prometheus Metrics",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Content-Type is text/plain', () => {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('text/plain');",
+                  "});",
+                  "const body = pm.response.text();",
+                  "pm.test('Contains prompt_requests_total', () => pm.expect(body).to.include('prompt_requests_total'));",
+                  "pm.test('Contains processing_latency_seconds', () => pm.expect(body).to.include('processing_latency_seconds'));",
+                  "pm.test('Contains llm_calls_total', () => pm.expect(body).to.include('llm_calls_total'));",
+                  "",
+                  "console.log('Metrics endpoint is responding with Prometheus text format.');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["metrics"]
+            },
+            "description": "Returns Prometheus text-format metrics for scraping.\n\nKey metrics exposed:\n- `prompt_requests_total{status, cached}` — request counters\n- `prompt_cache_hits_total{match_type}` — cache hit counters (exact | semantic)\n- `prompt_cache_misses_total` — cache miss counter\n- `llm_calls_total{outcome}` — LLM call outcomes (success | failure)\n- `rate_limit_denials_total` — rate-limited requests\n- `job_queue_depth` — current queue depth gauge\n- `worker_active_jobs{worker_id}` — active jobs per worker gauge\n- `processing_latency_seconds{stage}` — latency histograms (cache | llm | total)\n- `job_attempts_total` — retry histogram"
+          },
+          "response": [
+            {
+              "name": "Prometheus Text Format",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {"raw": "{{base_url}}/metrics", "host": ["{{base_url}}"], "path": ["metrics"]}
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "text",
+              "header": [{"key": "Content-Type", "value": "text/plain; version=0.0.4; charset=utf-8"}],
+              "body": "# HELP prompt_requests_total Total prompt requests\n# TYPE prompt_requests_total counter\nprompt_requests_total{cached=\"false\",status=\"completed\"} 24.0\nprompt_requests_total{cached=\"true\",status=\"completed\"} 8.0\n# HELP prompt_cache_hits_total Total cache hits\n# TYPE prompt_cache_hits_total counter\nprompt_cache_hits_total{match_type=\"exact\"} 6.0\nprompt_cache_hits_total{match_type=\"semantic\"} 2.0\n# HELP llm_calls_total Total LLM provider calls\n# TYPE llm_calls_total counter\nllm_calls_total{outcome=\"success\"} 22.0\nllm_calls_total{outcome=\"failure\"} 2.0\n# HELP processing_latency_seconds Processing latency by stage\n# TYPE processing_latency_seconds histogram\nprocessing_latency_seconds_bucket{stage=\"total\",le=\"0.1\"} 8.0\nprocessing_latency_seconds_bucket{stage=\"total\",le=\"0.5\"} 20.0\n..."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
