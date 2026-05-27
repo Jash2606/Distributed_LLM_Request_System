@@ -1,0 +1,89 @@
+### ── Sample HTTP Requests (VS Code REST Client / IntelliJ HTTP Client) ──────
+
+@base = http://localhost:8000
+
+### 1. Process a prompt (cache miss → LLM call)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "user_alice",
+  "prompt_id": "prompt_001",
+  "text": "Explain quantum computing in simple terms",
+  "priority": "high"
+}
+
+### 2. Same prompt again (should return cached: true)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "user_alice",
+  "prompt_id": "prompt_002",
+  "text": "Explain quantum computing in simple terms",
+  "priority": "normal"
+}
+
+### 3. Idempotency — exact same prompt_id + text (returns existing result)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "user_alice",
+  "prompt_id": "prompt_001",
+  "text": "Explain quantum computing in simple terms",
+  "priority": "high"
+}
+
+### 4. Conflict — same prompt_id but different text (expect 409)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "user_alice",
+  "prompt_id": "prompt_001",
+  "text": "Completely different text here",
+  "priority": "normal"
+}
+
+### 5. Poll result by prompt_id
+GET {{base}}/result/prompt_001
+
+### 6. Low-priority prompt
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "user_bob",
+  "prompt_id": "prompt_low_001",
+  "text": "Write a haiku about databases",
+  "priority": "low"
+}
+
+### 7. Health check
+GET {{base}}/health
+
+### 8. Prometheus metrics
+GET {{base}}/metrics
+
+### 9. Validation error — empty text (expect 422)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "prompt_id": "p_bad",
+  "text": "",
+  "priority": "normal"
+}
+
+### 10. Validation error — invalid priority (expect 422)
+POST {{base}}/process
+Content-Type: application/json
+
+{
+  "user_id": "u1",
+  "prompt_id": "p_bad2",
+  "text": "valid text",
+  "priority": "urgent"
+}
